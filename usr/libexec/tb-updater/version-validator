@@ -3,7 +3,18 @@
 ## Copyright (C) 2012 - 2025 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
 ## See the file COPYING for copying conditions.
 
-source /usr/libexec/helper-scripts/strings.bsh
+helper_scripts_file="/usr/libexec/helper-scripts/strings.bsh"
+version_parser_bin="/usr/libexec/tb-updater/version-parser"
+
+if [ -r "${BASH_SOURCE[0]%/*}/../helper-scripts/strings.bsh" ]; then
+   helper_scripts_file="${BASH_SOURCE[0]%/*}/../helper-scripts/strings.bsh"
+fi
+
+if [ -x "${BASH_SOURCE[0]%/*}/version-parser" ]; then
+   version_parser_bin="${BASH_SOURCE[0]%/*}/version-parser"
+fi
+
+source "$helper_scripts_file"
 
 set_stripped_tbb_version() {
    tbb_version_raw="$@"
@@ -16,7 +27,7 @@ tbbversion() {
       tbb_parser_exit_code tbb_version_max_length tbb_version_length parsed_version_temp
 
    command -v printf >/dev/null
-   command -v /usr/libexec/tb-updater/version-parser >/dev/null
+   command -v "$version_parser_bin" >/dev/null
    command -v sanitize-string >/dev/null
    command -v unicode-show >/dev/null
    command -v append >/dev/null
@@ -45,7 +56,7 @@ tbbversion() {
    ## Global variable, expected to be set by the caller
    ## stdout and stderr redirected to /dev/null in case the version-parser gets exploited to prevent it from echoing malicious advice.
    ## $RecommendedTBBVersions file should have a maximum size of 2 MB. This is enforced at update-torbrowser level.
-   2>/dev/null >/dev/null /usr/libexec/tb-updater/version-parser --quiet "${tbb_version_remote_file}" "${tbb_version_output_file}" || tbb_parser_exit_code="$?"
+   2>/dev/null >/dev/null "$version_parser_bin" --quiet "${tbb_version_remote_file}" "${tbb_version_output_file}" || tbb_parser_exit_code="$?"
 
    case "${tbb_parser_exit_code}" in
       0)
@@ -98,6 +109,18 @@ tbbversion() {
 #             safe-rm -- "${tbb_version_output_file}"
 #             return 0
             printf '%s\n' "$0: development: grep-find-unicode-wrapper unexpected exit code 0. This message is for developers only. No need to report this."
+         fi
+
+         ## Explicitly reject any remaining control characters such as NUL or BEL
+         ## that may have survived the earlier heuristics. Tabs/newlines/CR are
+         ## allowed for parsing convenience and stripped later.
+         if [ -n "$(LC_ALL=C tr -d '\11\12\15\40-\176' < "${tbb_version_output_file}")" ]; then
+            set_stripped_tbb_version 'UNKNOWN'
+            tbb_recommended_versions_error="Rejected invalid RecommendedTBBVersions versions file. \
+(Control characters found in version string.)"
+            safe-rm -- "${tbb_version_remote_file}"
+            safe-rm -- "${tbb_version_output_file}"
+            return 0
          fi
 
          ## At this point we trust the version string enough to load it - if

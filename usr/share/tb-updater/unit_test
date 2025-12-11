@@ -36,14 +36,67 @@ test -f "$RecommendedTBBVersions"
 
 tbbversion
 
-if [ "$tbb_version_stripped" = "UNKNOWN" ]; then
+if [ "$tbb_version_stripped" = "UNKNOWN" ] \
+   && [ "$tbb_recommended_versions_error" = "Rejected invalid RecommendedTBBVersions versions file. (version-parser failed - file invalid or malicious)" ]; then
    true "$0: INFO: OK"
 else
    stecho "$0: tbb_version: '$tbb_version_stripped'"
+   stecho "$0: tbb_error: '$tbb_recommended_versions_error'"
    stecho "$0: ERROR 2!"
    exit 1
 fi
 
 ####
 
+RecommendedTBBVersions="./usr/share/tb-updater/unit-test/RecommendedTBBVersions3"
+test -f "$RecommendedTBBVersions"
+
+tbbversion
+
+if [ "$tbb_version_stripped" = "UNKNOWN" ] \
+   && [ "$tbb_recommended_versions_error" = "Rejected invalid RecommendedTBBVersions versions file. (version-parser output does not look like a valid version number.)" ]; then
+   true "$0: INFO: OK"
+else
+   stecho "$0: tbb_version: '$tbb_version_stripped'"
+   stecho "$0: tbb_error: '$tbb_recommended_versions_error'"
+   stecho "$0: ERROR 3!"
+   exit 1
+fi
+
+####
+
 true "$0: INFO: OK"
+
+####
+
+RecommendedTBBVersions="./usr/share/tb-updater/unit-test/RecommendedTBBVersions4"
+test -f "$RecommendedTBBVersions"
+
+tbbversion
+
+if [ "$tbb_version_stripped" = "UNKNOWN" ] \
+   && [ "$tbb_recommended_versions_error" = "Rejected invalid RecommendedTBBVersions versions file. (version-parser output failed check_is_not_empty_and_only_one_line test.)" ]; then
+   true "$0: INFO: OK"
+else
+   stecho "$0: tbb_version: '$tbb_version_stripped'"
+   stecho "$0: tbb_error: '$tbb_recommended_versions_error'"
+   stecho "$0: ERROR 4!"
+   exit 1
+fi
+
+####
+
+RecommendedTBBVersions="./usr/share/tb-updater/unit-test/RecommendedTBBVersions5"
+test -f "$RecommendedTBBVersions"
+
+tbbversion
+
+if [ "$tbb_version_stripped" = "UNKNOWN" ] \
+   && [ "$tbb_recommended_versions_error" = "Rejected invalid RecommendedTBBVersions versions file. (Control characters found in version string.)" ]; then
+   true "$0: INFO: OK"
+else
+   stecho "$0: tbb_version: '$tbb_version_stripped'"
+   stecho "$0: tbb_error: '$tbb_recommended_versions_error'"
+   stecho "$0: ERROR 5!"
+   exit 1
+fi
