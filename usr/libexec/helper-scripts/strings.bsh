@@ -1,0 +1,90 @@
+#!/bin/bash
+
+## Minimal helper implementations for running tb-updater unit tests in-tree.
+## These functions aim to mirror the behavior required by version-validator
+## without pulling external dependencies.
+
+sanitize-string() {
+   local maxlen="$1"
+
+   if [ "$maxlen" = "--" ]; then
+      shift
+      maxlen="$1"
+   fi
+
+   shift
+   local text="$*"
+
+   if [ "$maxlen" != "nolimit" ] && [ -n "$maxlen" ]; then
+      text="${text:0:$maxlen}"
+   fi
+
+   ## Strip non-printable control characters except for newlines and tabs.
+   text="$(printf '%s' "$text" | LC_ALL=C tr -cd '\11\12\15\40-\176')"
+   printf '%s' "$text"
+}
+
+stecho() {
+   echo "$@"
+}
+
+error() {
+   echo "$@" >&2
+}
+
+append() {
+   local file="$1"
+   shift
+   printf '%s\n' "$*" >> "$file"
+}
+
+unicode-show() {
+   local file="$1"
+   ## Return non-zero if any non-ASCII bytes are present.
+   if LC_ALL=C grep -q '[^ -~\t\r\n]' "$file"; then
+      return 1
+   fi
+   return 0
+}
+
+grep-find-unicode-wrapper() {
+   ## Emulate grep wrapper: return 0 if non-ASCII found, 1 otherwise.
+   local file
+   for arg in "$@"; do
+      if [ "$arg" = "--" ]; then
+         continue
+      fi
+      file="$arg"
+   done
+
+   if LC_ALL=C grep -q '[^ -~\t\r\n]' "$file"; then
+      return 0
+   fi
+   return 1
+}
+
+stcat() {
+   cat "$1"
+}
+
+check_is_not_empty_and_only_one_line() {
+   local varname="$1"
+   local value="${!varname}"
+
+   if [ -z "$value" ]; then
+      return 1
+   fi
+
+   if [[ "$value" == *$'\n'* ]]; then
+      return 1
+   fi
+
+   return 0
+}
+
+safe-rm() {
+   shift 1 2>/dev/null
+   for path in "$@"; do
+      rm -f -- "$path"
+   done
+}
