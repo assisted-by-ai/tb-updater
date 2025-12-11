@@ -7,11 +7,15 @@
 ## Browser update information JSON. Assumes the input JSON could be malicious,
 ## and is thus hardened against unexpected data.
 
-from pathlib import Path
 import argparse
+import os
 import json
 import re
 import sys
+import stat
+from pathlib import Path
+
+VERSION_PATTERN = re.compile(r"^([0-9a-z]+\.)+[0-9a-z]+(-arm64|-armhf)?$")
 
 # Prints a message to stdout unless running in quiet mode.
 def print_noisy(msg):
@@ -19,13 +23,7 @@ def print_noisy(msg):
         return
     print(msg, file=sys.stderr)
 
-def tbbversion_x64():
-    try:
-        input_text = input_path.read_text()
-    except:
-        print_noisy("ERROR: Cannot read input file!")
-        exit(2)
-
+def tbbversion_x64(input_text, output_file):
     try:
         input_json = json.loads(input_text)
     except:
@@ -49,8 +47,17 @@ def tbbversion_x64():
         exit(3)
 
     try:
-        with output_path.open(mode = 'w') as f:
-            f.writelines([version_string])
+        version_string.encode("ascii")
+    except UnicodeEncodeError:
+        print_noisy("ERROR: Rejecting input JSON, version string contains non-ASCII characters!")
+        exit(3)
+
+    if not VERSION_PATTERN.match(version_string):
+        print_noisy("ERROR: Rejecting input JSON, version string does not match expected format!")
+        exit(3)
+
+    try:
+        output_file.writelines([version_string])
     except:
         print_noisy("ERROR: Could not write version string to output file!")
         exit(2)
@@ -79,21 +86,94 @@ elif args.output_file is None:
     exit(1)
 
 input_path = Path(args.input_file)
-output_path = Path(args.output_file)
 
-if not input_path.absolute().as_posix().startswith("/tmp"):
-    print_noisy("WARNING: The input file is not under /tmp. This may not work.")
-if not output_path.absolute().as_posix().startswith("/tmp"):
-    print_noisy("WARNING: The output file is not under /tmp. This may not work.")
+try:
+    input_parent_fd = os.open(input_path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+except:
+    print_noisy("ERROR: Input directory is not a real directory.")
+    exit(2)
 
-if not input_path.exists():
+try:
+    input_stat = os.stat(input_path.name, dir_fd=input_parent_fd, follow_symlinks=False)
+    if not stat.S_ISREG(input_stat.st_mode):
+        print_noisy("ERROR: Input file is not a regular file.")
+        os.close(input_parent_fd)
+        exit(2)
+except FileNotFoundError:
+    os.close(input_parent_fd)
     print_noisy("ERROR: Input file does not exist.")
     exit(2)
-else:
-    try:
-        output_path.touch(mode=0o644, exist_ok=True)
-    except:
-        print_noisy("ERROR: Cannot access output file.")
-        exit(2)
+except:
+    os.close(input_parent_fd)
+    print_noisy("ERROR: Cannot stat input file.")
+    exit(2)
 
-tbbversion_x64()
+## Bail out early if the JSON file is unexpectedly large. Upstream callers
+## already try to cap downloads at 2 MB, but re-checking here prevents
+## memory exhaustion should that guard be bypassed.
+MAX_INPUT_BYTES = 2 * 1024 * 1024
+
+if input_stat.st_size > MAX_INPUT_BYTES:
+    os.close(input_parent_fd)
+    print_noisy("ERROR: Rejecting input file, size exceeds 2 MB!")
+    exit(3)
+
+try:
+    input_fd = os.open(input_path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=input_parent_fd)
+except:
+    os.close(input_parent_fd)
+    print_noisy("ERROR: Cannot access input file.")
+    exit(2)
+
+os.close(input_parent_fd)
+try:
+    with os.fdopen(input_fd, mode='rb') as input_file:
+        input_text_bytes = input_file.read(MAX_INPUT_BYTES + 1)
+except:
+    print_noisy("ERROR: Cannot read input file!")
+    exit(2)
+
+if len(input_text_bytes) > MAX_INPUT_BYTES:
+    print_noisy("ERROR: Rejecting input file, size exceeds 2 MB!")
+    exit(3)
+
+try:
+    input_text = input_text_bytes.decode()
+except:
+    print_noisy("ERROR: Cannot decode input file as UTF-8 text!")
+    exit(2)
+
+output_path = Path(args.output_file)
+
+if not output_path.parent.exists():
+    print_noisy("ERROR: Output directory does not exist.")
+    exit(2)
+
+try:
+    parent_fd = os.open(output_path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+except:
+    print_noisy("ERROR: Output directory is not a real directory.")
+    exit(2)
+
+try:
+    existing_output = os.stat(output_path.name, dir_fd=parent_fd, follow_symlinks=False)
+    if not stat.S_ISREG(existing_output.st_mode):
+        print_noisy("ERROR: Output file is not a regular file.")
+        os.close(parent_fd)
+        exit(2)
+except FileNotFoundError:
+    pass
+
+tbb_open_flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
+
+try:
+    output_fd = os.open(output_path.name, tbb_open_flags, 0o644, dir_fd=parent_fd)
+except:
+    os.close(parent_fd)
+    print_noisy("ERROR: Cannot access output file.")
+    exit(2)
+
+os.close(parent_fd)
+
+with os.fdopen(output_fd, mode='w') as output_file:
+    tbbversion_x64(input_text, output_file)
