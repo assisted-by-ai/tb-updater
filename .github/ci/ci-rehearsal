@@ -6,11 +6,10 @@
 ## Local rehearsal of the GitHub Actions self-test workflow.
 ##
 ## Runs a container that mirrors what .github/workflows/self-test.yml
-## does: installs genmkfile, helper-scripts and msgcollector from their
-## Kicksecure git repositories, installs sq / sqop / faketime from the
-## distribution's apt sources, copies tb-updater from the local checkout
-## into the container's system paths, and runs .github/ci/self-test
-## under an unprivileged tbtest account.
+## does. The container-side install + test logic lives in the sibling
+## script .github/ci/ci-rehearsal-inner; this wrapper only chooses the
+## image, bind-mounts the checkout plus any host TLS-inspection CAs,
+## and hands off.
 ##
 ## Usage:
 ##   .github/ci/ci-rehearsal
@@ -22,13 +21,6 @@
 ## egress reaches deb.debian.org; ubuntu:plucky is picked as the
 ## default because archive.ubuntu.com tends to be reachable from
 ## sandboxed dev environments where deb.debian.org is not.
-##
-## The Kicksecure repositories are fetched over HTTPS from github.com,
-## so the runner's TLS trust store must include a root that github.com
-## chains to. If the runner is behind a TLS-inspecting proxy, bind any
-## extra CA certificates into /usr/local/share/ca-certificates/ inside
-## the container (see the CA_DIR variable below) and this script will
-## rehash them before running apt.
 
 set -o errexit
 set -o nounset
@@ -37,8 +29,12 @@ set -o pipefail
 
 image="${1:-ubuntu:plucky}"
 
-repo_root="$(cd -- "$(dirname -- "$(readlink -f -- "$0")")/../.." && pwd)"
+self_dir="$(cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd)"
+repo_root="$(cd -- "$self_dir/../.." && pwd)"
+inner_script="$self_dir/ci-rehearsal-inner"
 
+[ -x "$inner_script" ] \
+   || { printf '%s\n' "$0: $inner_script not found or not executable." >&2; exit 1; }
 command -v docker >/dev/null \
    || { printf '%s\n' "$0: docker is required." >&2; exit 1; }
 
@@ -49,71 +45,6 @@ ca_mount=()
 if [ -d /usr/local/share/ca-certificates ]; then
    ca_mount=( -v /usr/local/share/ca-certificates:/host-ca:ro )
 fi
-
-inner_script="$(mktemp)"
-trap 'rm -f -- "$inner_script"' EXIT
-
-cat > "$inner_script" <<'INNER'
-set -o errexit
-set -o nounset
-set -o errtrace
-set -o pipefail
-
-export DEBIAN_FRONTEND=noninteractive
-mkdir -p /usr/local/share/ca-certificates
-if [ -d /host-ca ] && compgen -G '/host-ca/*.crt' >/dev/null; then
-   cp -f /host-ca/*.crt /usr/local/share/ca-certificates/
-fi
-
-apt-get update >/dev/null
-apt-get install -y --no-install-recommends \
-   ca-certificates curl git sudo adduser build-essential >/dev/null
-update-ca-certificates >/dev/null 2>&1 || true
-
-git clone --depth=1 https://github.com/Kicksecure/genmkfile.git /tmp/genmkfile
-cd /tmp/genmkfile
-./usr/bin/genmkfile deb-all-dep >/dev/null
-./usr/bin/genmkfile install
-
-git clone --depth=1 https://github.com/Kicksecure/helper-scripts.git /tmp/helper-scripts
-cd /tmp/helper-scripts
-genmkfile install
-
-git clone --depth=1 https://github.com/Kicksecure/msgcollector.git /tmp/msgcollector
-cd /tmp/msgcollector
-genmkfile install
-
-apt-get install -y --no-install-recommends \
-   sq sqop libarchive-tools safe-rm \
-   curl jq psmisc pv iproute2 python3 faketime >/dev/null
-
-cd /repo
-install -m 0755 -t /usr/bin \
-   usr/bin/update-torbrowser \
-   usr/bin/update-mullvadbrowser \
-   usr/bin/update-i2pbrowser
-install -d /usr/libexec/tb-updater
-cp -r usr/libexec/tb-updater/. /usr/libexec/tb-updater/
-install -d /usr/share/tb-updater
-cp -r usr/share/tb-updater/. /usr/share/tb-updater/
-install -d /usr/share/torbrowser-updater-keys.d
-cp -r usr/share/torbrowser-updater-keys.d/. /usr/share/torbrowser-updater-keys.d/
-
-adduser --disabled-password --gecos '' tbtest >/dev/null
-install -d -o tbtest -g tbtest /home/tbtest/ci
-install -m 0755 -o tbtest -g tbtest \
-   /repo/.github/ci/self-test /repo/.github/ci/make-fixture \
-   /home/tbtest/ci/
-
-printf '\n===== tool versions =====\n'
-sq version 2>&1 | head -3 || sq --version 2>&1 | head -1
-sqop version 2>&1 | head -1
-faketime --version 2>&1 | head -1
-
-printf '\n===== self-test =====\n'
-sudo -u tbtest env CI=true /home/tbtest/ci/self-test -v 2>&1 \
-   | grep -E '\[(PASS|FAIL)\]|^=='
-INNER
 
 docker run --rm \
    -v "$repo_root:/repo:ro" \
